@@ -9,14 +9,118 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     from dataclasses import dataclass
-    from langchain_core.documents.base import Document
-    import langchain_text_splitters as text_splitters
     import marimo as mo
     import numpy as np
     import openai
     import pandas as pd
+
+    # micropip installs
+    #import micropip
+    #await micropip.install("openai>=1.77.0")
+    #await micropip.install("langchain-core", deps=False)
+    #from langchain_core.documents.base import Document
+    #await micropip.install("langchain-text-splitters", deps=False)
+    #import langchain_text_splitters as text_splitters
+
     #import pdfplumber
-    return Document, mo, np, openai, pd, text_splitters
+    return mo, np, openai, pd
+
+
+@app.cell
+def _():
+    import re
+    from typing import List, Optional, Dict
+
+    class Document:
+        """Minimal stand-in for langchain_core.documents.base.Document."""
+        def __init__(self, page_content: str, metadata: Optional[Dict[str, str]] = None):
+            self.page_content = page_content
+            self.metadata = metadata or {}
+
+    class MarkdownHeaderTextSplitter:
+        """
+        Splits a Markdown string into sections at specified header lines.
+        """
+        def __init__(self,
+                     headers_to_split_on: List[tuple] = None,
+                     return_each_line: bool = False,
+                     strip_headers: bool = True):
+            """
+            headers_to_split_on: list of (marker, metadata_key) e.g. [("#", "Seksjonsinndeling")]
+            return_each_line: if True, return each line in the segment as separate Document.
+            strip_headers: if True, remove header lines from page_content.
+            """
+            if headers_to_split_on is None:
+                # default to all header levels # through ######
+                self.headers_map = {f"{'#'*i}": "header" for i in range(1, 7)}
+            else:
+                self.headers_map = dict(headers_to_split_on)
+            # Escape markers and sort by length to match longer markers first
+            markers = sorted(self.headers_map.keys(), key=len, reverse=True)
+            pattern = (
+                r'(?m)^(?P<marker>' + '|'.join(map(re.escape, markers)) + r')\s+(?P<text>.+)$'
+            )
+            self.HEADER_PATTERN = re.compile(pattern)
+            self.return_each_line = return_each_line
+            self.strip_headers = strip_headers
+
+        def split_text(self, text: str) -> List[Document]:
+            matches = list(self.HEADER_PATTERN.finditer(text))
+            # If no headers matched, return full text or each non-empty line
+            if not matches:
+                if self.return_each_line:
+                    return [Document(page_content=line)
+                            for line in text.splitlines() if line.strip()]
+                return [Document(page_content=text)]
+
+            docs: List[Document] = []
+            # Handle preamble before first header
+            first_start = matches[0].start()
+            preamble = text[:first_start]
+            if preamble.strip():
+                if self.return_each_line:
+                    for line in preamble.splitlines():
+                        if line.strip():
+                            docs.append(Document(page_content=line))
+                else:
+                    docs.append(Document(page_content=preamble))
+
+            # Process each header section
+            for i, m in enumerate(matches):
+                start = m.start()
+                end = matches[i+1].start() if i+1 < len(matches) else len(text)
+                section = text[start:end]
+                marker = m.group('marker')
+                header_text = m.group('text').strip()
+                metadata_key = self.headers_map.get(marker)
+                metadata = {metadata_key: header_text} if metadata_key else {}
+
+                # Determine content without header if strip_headers=True
+                if self.strip_headers:
+                    content = section[m.end() - start:].lstrip('\n')
+                else:
+                    content = section
+
+                if self.return_each_line:
+                    for line in content.splitlines():
+                        if line.strip():
+                            docs.append(Document(page_content=line, metadata=metadata.copy()))
+                else:
+                    docs.append(Document(page_content=content, metadata=metadata))
+
+            return docs
+
+    # Example Usage:
+    # splitter = MarkdownHeaderTextSplitter(
+    #     headers_to_split_on=[('#', 'Seksjonsinndeling')],
+    #     return_each_line=True,
+    #     strip_headers=False,
+    # )
+    # docs = splitter.split_text(your_markdown_string)
+    # for doc in docs:
+    #     print(doc.metadata, doc.page_content)
+
+    return Document, MarkdownHeaderTextSplitter
 
 
 @app.function
@@ -193,13 +297,15 @@ def _(sel_model):
 
 @app.cell
 def _(lang_ns, mo, openai_client, sel_model):
-    _test_response = openai_client.responses.create(
+    _messages = [{"role": "user", "content": lang_ns.chat_model_test_query}, ]
+    _test_response = openai_client.chat.completions.create(
         model=sel_model.value,
-        input=lang_ns.chat_model_test_query,
+        messages=_messages,
     )
+    _output_text = _test_response.choices[0].message.content
     mo.md(text=f"""
     # {lang_ns.chat_model_test_header}
-    {_test_response.output_text}
+    {_output_text}
     """)
     return
 
@@ -222,8 +328,8 @@ def _(mo):
 
 
 @app.cell
-def _(file_upload, text_splitters):
-    markdown_splitter = text_splitters.MarkdownHeaderTextSplitter(
+def _(MarkdownHeaderTextSplitter, file_upload):
+    markdown_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=[
             ("#", "Seksjonsinndeling"), 
         ],
