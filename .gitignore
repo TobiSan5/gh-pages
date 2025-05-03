@@ -1,4 +1,5 @@
 _site/
+apps/html-wasm/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
