@@ -30,8 +30,8 @@ jobs:
         run: |
           uv pip install marimo
           uv pip install pandas
-          uv pip install lanchain
-          uv pip install lanchain-text-splitters
+          uv pip install langchain
+          uv pip install langchain-text-splitters
           uv pip install openai
 
       - name: 🛠️ Export notebooks
